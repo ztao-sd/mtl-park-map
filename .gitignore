@@ -8,6 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
-/mtl_park_map/resource/raw/signalisation_stationnement.csv
-/mtl_park_map/resource/raw/signalisation-codification-rpa.csv
-/mtl_park_map/resource/raw/signalisation-codification-rtp.csv
+
+# Large source data + generated artifacts (data/ is shared by the web app and legacy/qt_app)
+/data/raw/signalisation_stationnement.csv
+/data/raw/signalisation-codification-rpa.csv
+/data/raw/signalisation-codification-rtp.csv
+/data/curated/*.parquet
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# AI
+.ai-prompts
