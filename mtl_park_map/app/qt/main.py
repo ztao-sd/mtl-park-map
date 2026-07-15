@@ -3,9 +3,9 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from mtl_park_map.app.main_win import MainWindowView
-from mtl_park_map.config import Config
-from mtl_park_map.lib.paid_parking_query import PaidParkingAnalyzer
+from mtl_park_map.app.qt.main_win import MainWindowView
+from mtl_park_map.app.qt.config import Config
+from mtl_park_map.app.parking_spot_analyzer import PaidParkingAnalyzer
 
 
 def main():

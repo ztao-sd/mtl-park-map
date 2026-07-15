@@ -1,15 +1,11 @@
-import pickle
 import re
 from enum import IntEnum
+from pathlib import Path
 
-import geopandas as gpd
-import pandas as pd
+import polars as pl
 
-from mtl_park_map.app.qt.config import RESOURCE_DIR, RAW_RESOURCE_DIR
-from mtl_park_map.lib.enums import Day, DayAbbreviation, Month, MonthAbbreviation
-from mtl_park_map.lib.app_type import StrPath
-
-RPA_COLUMN = "DESCRIPTION_RPA"
+import mtl_park_map as mpm
+from mtl_park_map.lib.enums import Day, Month, DayAbbreviation, MonthAbbreviation
 
 
 def get_int_enum(val: str, type_: type[IntEnum]) -> IntEnum | None:
@@ -19,7 +15,7 @@ def get_int_enum(val: str, type_: type[IntEnum]) -> IntEnum | None:
         return None
 
 
-def conv_time_str_to_float(time_str: str) -> float:
+def conv_time_str_to_hour(time_str: str) -> float:
     vals = time_str.lower().split("h")
     num = 0
     if vals:
@@ -30,22 +26,22 @@ def conv_time_str_to_float(time_str: str) -> float:
     return num
 
 
-def extract_hour_ranges_from_str(s: str) -> tuple[float, ...]:
+def extract_hour_ranges_from_str(s: str) -> list[dict[str, float]]:
     hour_ranges = []
     if matches := re.findall(
         r"(\d{1,2}h\d{0,2})-(\d{1,2}h\d{0,2})", s, flags=re.IGNORECASE
     ):
         for start, end in matches:
             hour_ranges.append(
-                (
-                    conv_time_str_to_float(start),
-                    conv_time_str_to_float(end),
-                )
+                {
+                    "start": conv_time_str_to_hour(start),
+                    "end": conv_time_str_to_hour(end),
+                }
             )
-    return tuple(hour_ranges)
+    return hour_ranges
 
 
-def extract_day_month_ranges_from_row(row, pattern: str) -> pd.Series:
+def extract_day_month_ranges_from_row(s: str, pattern: str) -> pd.Series:
     day_ranges = []
     month_ranges = []
     s = row[RPA_COLUMN]
@@ -89,15 +85,11 @@ def extract_day_month_ranges_from_row(row, pattern: str) -> pd.Series:
     return pd.Series([tuple(day_ranges), tuple(month_ranges)])
 
 
-def generate_raw_parking_sign_pickle(parking_sign_geojson: StrPath, parking_sign_pickle: StrPath) -> None:
-    gdf = gpd.read_file(parking_sign_geojson)
-    with open(parking_sign_pickle, "wb") as f:
-        pickle.dump(gdf, f)
+if __name__ == "__main__":
+    RAW_DATA_DIR = Path(mpm.__file__).parent / "resource" / "raw"
+    PARKING_SIGN_CSV = RAW_DATA_DIR / "signalisation_stationnement.csv"
+    RPA_DESCRIPTION_COLUMN = "DESCRIPTION_RPA"
 
-
-def generate_curated_parking_sign_data(
-    parking_sign_pickle: StrPath, curated_pickle: StrPath
-):
     any_pattern = "|".join(
         [d.name for d in Day]
         + [m.name for m in Month]
@@ -106,22 +98,26 @@ def generate_curated_parking_sign_data(
         + ["ET", "A", "AU"]
     )
 
-    with open(parking_sign_pickle, "rb") as f:
-        gdf: gpd.GeoDataFrame = pickle.load(f)
+    parking_sign_df = pl.scan_csv(PARKING_SIGN_CSV)
 
-    # Filter by parking sign
-    # gdf = gdf[gdf[RPA_COLUMN].str.contains(r"^\\P", case=False, regex=True)]
-    gdf["hour_ranges"] = gdf[RPA_COLUMN].apply(extract_hour_ranges_from_str)
-    gdf[["day_ranges", "month_ranges"]] = gdf.apply(
-        extract_day_month_ranges_from_row, args=(any_pattern,), axis=1
-    )
-    with open(curated_pickle, "wb") as f:
-        pickle.dump(gdf, f)
+    step1 = parking_sign_df.with_columns(
+        pl.col(RPA_DESCRIPTION_COLUMN)
+        .map_elements(
+            extract_hour_ranges_from_str,
+            return_dtype=pl.List(
+                pl.Struct(
+                    [
+                        pl.Field("start", pl.Float64),
+                        pl.Field("end", pl.Float64),
+                    ]
+                )
+            ),
+        )
+        .alias("generated_hour_ranges")
+    ).explode("generated_hour_ranges", empty_as_null=True).unnest("generated_hour_ranges")
 
 
-if __name__ == "__main__":
-    parking_sign_geojson = RAW_RESOURCE_DIR / "signalisation_stationnement.geojson.json"
-    parking_sign_pickle = RAW_RESOURCE_DIR / "signalisation-codification-parking.pickle"
-    curated_pickle = RESOURCE_DIR / "curated" / "parking_sign_curated.pickle"
-    # generate_raw_parking_sign_pickle(parking_sign_geojson, parking_sign_pickle)
-    generate_curated_parking_sign_data(parking_sign_pickle, curated_pickle)
+
+    print(parking_sign_df.collect())
+    print(step1.collect())
+    print(step1.select(["DESCRIPTION_RPA", "start", "end"]).collect())

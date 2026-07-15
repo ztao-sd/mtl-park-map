@@ -4,7 +4,7 @@ from enum import IntFlag
 from pathlib import Path
 import duckdb
 
-from mtl_park_map.config import RAW_RESOURCE_DIR
+from mtl_park_map.app.qt.config import RAW_RESOURCE_DIR
 from mtl_park_map.lib.query_utils import is_within_interval
 
 CWD = Path.cwd()

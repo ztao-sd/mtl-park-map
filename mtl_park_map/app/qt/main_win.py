@@ -8,8 +8,8 @@ from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QMessageBox
 
 from mtl_park_map.lib.geolocate import locate_address
 from mtl_park_map.lib.mtl_map import mtl_map, add_marker, add_marker_cluster
-from mtl_park_map.app.sidebar_control import SideBarView
-from mtl_park_map.lib.paid_parking_query import PaidParkingAnalyzer, check_paid_periods
+from mtl_park_map.app.qt.sidebar_control import SideBarView
+from mtl_park_map.app.parking_spot_analyzer import PaidParkingAnalyzer, check_paid_periods
 from mtl_park_map.lib.parking_sign_query import (
     query_by_rpa_regex,
     RPA_COLUMN,

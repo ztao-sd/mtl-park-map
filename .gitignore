@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+/mtl_park_map/resource/raw/signalisation_stationnement.csv
+/mtl_park_map/resource/raw/signalisation-codification-rpa.csv
+/mtl_park_map/resource/raw/signalisation-codification-rtp.csv
