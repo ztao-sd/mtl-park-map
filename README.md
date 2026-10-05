@@ -32,7 +32,7 @@ data/raw/*.csv ─(polars ETL)→ data/curated/*.parquet ─(load at startup)→
 
 ```bash
 uv sync && uv run python -m mtl_park_map.etl.build   # first time only: build parquet
-uv run python dev.py                                 # backend :8000 + frontend :5173
+cd frontend && npm run dev:all                       # backend :8000 + frontend :5173
 ```
 
 Then open <http://localhost:5173> (Ctrl+C stops both). To run them individually, see below.
@@ -55,7 +55,8 @@ Requires the backend running on `:8000` (the dev server proxies `/api/*` to it).
 cd frontend
 npm install
 npm run codegen     # regenerate the typed API client from ../openapi.json
-npm run dev         # http://localhost:5173
+npm run dev         # http://localhost:5173 (frontend only)
+npm run dev:all     # frontend + backend together (concurrently)
 npm run test        # vitest
 npm run build
 ```
