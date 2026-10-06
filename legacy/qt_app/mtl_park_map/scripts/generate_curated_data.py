@@ -5,7 +5,7 @@ from enum import IntEnum
 import geopandas as gpd
 import pandas as pd
 
-from mtl_park_map.config import RESOURCE_DIR, RAW_RESOURCE_DIR
+from mtl_park_map.app.qt.config import RESOURCE_DIR, RAW_RESOURCE_DIR
 from mtl_park_map.lib.enums import Day, DayAbbreviation, Month, MonthAbbreviation
 from mtl_park_map.lib.app_type import StrPath
 
