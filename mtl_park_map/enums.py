@@ -1,7 +1,11 @@
+"""French day/month vocabulary of the raw sign descriptions, and sign categories."""
+
 from enum import IntEnum, StrEnum
 
 
 class Day(IntEnum):
+    """French weekday names → ISO weekday number."""
+
     lundi = 1
     mardi = 2
     mercredi = 3
@@ -12,6 +16,8 @@ class Day(IntEnum):
 
 
 class DayAbbreviation(IntEnum):
+    """French weekday abbreviations → ISO weekday number."""
+
     lun = 1
     mar = 2
     mer = 3
@@ -22,6 +28,8 @@ class DayAbbreviation(IntEnum):
 
 
 class Month(IntEnum):
+    """French month names (unaccented) → month number."""
+
     janvier = 1
     fevrier = 2
     mars = 3
@@ -37,6 +45,8 @@ class Month(IntEnum):
 
 
 class MonthAbbreviation(IntEnum):
+    """French month abbreviations (unaccented) → month number."""
+
     jan = 1
     fev = 2
     mar = 3
@@ -54,6 +64,8 @@ class MonthAbbreviation(IntEnum):
 
 
 class SignCategory(StrEnum):
+    """Whether a sign permits parking (``\\P``), prohibits it (``\\A``) or neither."""
+
     permitted = "permitted"
     prohibited = "prohibited"
     other = "other"

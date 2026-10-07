@@ -1,4 +1,4 @@
-"""Offline ETL: raw Montreal CSVs -> curated parquet consumed by the API.
+"""Offline ETL: raw Montreal CSVs -> curated parquet consumed by the app.
 
 Run once (and after data refreshes): ``python -m mtl_park_map.etl.build``
 """
@@ -31,18 +31,48 @@ _CODES_SCHEMA = {
 }
 
 
-def read_cp1252_csv(path: Path) -> pl.DataFrame:
-    """Read a Windows-French CSV as all-string columns (cast later as needed)."""
-    utf8 = path.read_bytes().decode(settings.CSV_ENCODING).encode("utf-8")
-    return pl.read_csv(io.BytesIO(utf8), infer_schema_length=0)
+def read_raw_csv(path: Path) -> pl.DataFrame:
+    """Read a raw source CSV as all-string columns (cast later as needed).
+
+    Sources disagree on encoding: the city's sign CSV is UTF-8 while the AMDS
+    paid-spot CSVs are Windows-1252. Strict UTF-8 is tried first: accented
+    Windows-1252 text is virtually never valid UTF-8, so a successful decode is
+    reliable, whereas decoding UTF-8 as Windows-1252 "succeeds" with mojibake
+    (``Côte`` → ``CÃ´te``).
+
+    Args:
+        path: The CSV file.
+
+    Returns:
+        The table with every column as ``Utf8``.
+    """
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")  # also strips a BOM, if any
+    except UnicodeDecodeError:
+        text = raw.decode(settings.CSV_FALLBACK_ENCODING)
+    return pl.read_csv(io.StringIO(text), infer_schema_length=0)
 
 
 def _struct_list(ranges: Sequence[tuple[float, float]]) -> list[dict[str, float]]:
+    """Ranges as parquet ``{start, end}`` structs.
+
+    Args:
+        ranges: ``(start, end)`` pairs.
+
+    Returns:
+        One dict per range.
+    """
     return [{"start": start, "end": end} for start, end in ranges]
 
 
 def build_signs() -> tuple[pl.DataFrame, pl.DataFrame]:
-    raw = read_cp1252_csv(settings.SIGN_CSV)
+    """Parse every distinct sign code once and attach it to the sign locations.
+
+    Returns:
+        ``(signs, codes)`` frames for ``signs.parquet`` and ``codes.parquet``.
+    """
+    raw = read_raw_csv(settings.SIGN_CSV)
 
     codes = (
         raw.select("CODE_RPA", "DESCRIPTION_RPA")
@@ -101,10 +131,11 @@ def build_signs() -> tuple[pl.DataFrame, pl.DataFrame]:
 
 
 def main() -> None:
+    """Build all curated parquet files and print summary counts."""
     settings.CURATED_DIR.mkdir(parents=True, exist_ok=True)
 
     signs, codes = build_signs()
-    spots = build_spots(read_cp1252_csv)
+    spots = build_spots(read_raw_csv)
 
     signs.write_parquet(settings.SIGNS_PARQUET)
     codes.write_parquet(settings.CODES_PARQUET)

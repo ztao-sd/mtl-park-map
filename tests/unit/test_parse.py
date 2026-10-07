@@ -1,6 +1,7 @@
 from mtl_park_map.enums import SignCategory
 from mtl_park_map.etl.parse import (
     classify,
+    fold_accents,
     extract_day_month_ranges,
     extract_hour_ranges,
 )
@@ -56,3 +57,26 @@ def test_classify():
     assert classify(r"\A EN TOUT TEMPS") == (SignCategory.prohibited, False)
     assert classify(r"\A RESERVE AUTOBUS") == (SignCategory.prohibited, True)
     assert classify("INTERDICTION DE STAT. S3R") == (SignCategory.other, False)
+
+
+def test_accented_a_is_a_range_connector():
+    # "À" is the most common connector in the raw data (136 codes)
+    days, _ = extract_day_month_ranges(r"\P 09h-17h LUN À VEN")
+    assert days == [(1, 5)]
+
+
+def test_accented_month_tokens():
+    _, months = extract_day_month_ranges(r"\A 1 AVRIL AU 1 DÉC")
+    assert months == [(4, 12)]
+    _, months = extract_day_month_ranges(r"\A 15 JUIN À 15 AOÛT")
+    assert months == [(6, 8)]
+    _, months = extract_day_month_ranges(r"\A 1 FÉV AU 31 DÉCEMBRE")
+    assert months == [(2, 12)]
+
+
+def test_classify_accented_reserved():
+    assert classify(r"\P RÉSERVÉ S3R 09h-23h") == (SignCategory.permitted, True)
+
+
+def test_fold_accents():
+    assert fold_accents("RÉSERVÉ À AOÛT Côte") == "RESERVE A AOUT Cote"

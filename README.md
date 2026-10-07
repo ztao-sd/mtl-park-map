@@ -1,87 +1,88 @@
 # MTL Park Map
 
-Web app to explore Montreal on-street parking **signs** and **paid parking spots** on an
-interactive map, filterable by map viewport, hour / day-of-week / month range, sign
-category, and a NOT toggle on the time filter.
+Native desktop app to explore Montreal on-street parking **signs** and **paid parking
+spots** on an interactive map. You can filter by hour, day-of-week and month window
+(or its inverse), sign category and reserved signs, and jump to an address.
 
-A FastAPI backend serves GeoJSON from curated parquet (built offline with polars); a
-React + Leaflet single-page app renders it.
+![MTL Park Map](app_screenshot.png)
 
-> The original PySide6 desktop prototype is preserved under [`legacy/qt_app/`](legacy/qt_app/).
+Built with PySide6. The map is drawn natively with `QPainter` (no web view): OSM
+raster tiles are fetched with QtNetwork, and markers are clustered with polars.
 
 ## Architecture
 
 ```
-data/raw/*.csv ─(polars ETL)→ data/curated/*.parquet ─(load at startup)→ FastAPI (GeoJSON) ─(orval)→ React + MapLibre SPA
+data/raw/*.csv ─(polars ETL)→ data/curated/*.parquet ─(Store, in-process)→ PySide6 UI
+                                                                            └ slippy map widget (QPainter + OSM tiles)
 ```
 
-- **Storage:** curated parquet loaded into in-memory polars DataFrames at startup — no
-  database. The data is ~144k signs + ~20k spots, read-only, and rebuilt offline, so a DB
-  buys nothing (measured viewport filter: 5–8 ms). The spatial bounding-box cut is a
-  columnar polars filter; wraparound time filtering (e.g. `22h–07h`) runs in pure Python on
-  the small viewport subset.
-- **Sign parsing:** each of the 1,521 distinct sign codes is parsed *once* from its French
-  free-text description into hour/day/month ranges, a category
-  (`permitted` / `prohibited` / `other`), and a `reserved` flag.
-- **Frontend:** Vite + React + TypeScript, Leaflet + leaflet.markercluster (raster
-  basemap, no WebGL), TanStack Query via an orval-generated typed client, Tailwind.
-  Filter state lives in the URL; layers are off by default (nothing shown until you
-  pick a layer and press Apply).
+| Package | Responsibility |
+|---|---|
+| `mtl_park_map/etl/` | Offline ETL. Parses each of the 1,521 distinct sign codes **once** from its French free text into hour/day/month ranges, a category (`permitted` / `prohibited` / `other`) and a `reserved` flag. Joins the five paid-spot tables into per-spot metered periods. |
+| `mtl_park_map/query/` | Pure interval math: wraparound ranges (`22h–07h`, `SEPT À JUIN`) and the free/paid status of a metered spot. |
+| `mtl_park_map/store.py` | Loads the parquet into polars at startup (~0.3 s) and answers whole-city queries in 5–10 ms. Time matching runs once per sign code / distinct meter rule, never per row. |
+| `mtl_park_map/slippy/` | Generic native map widget with no parking knowledge. Covers Web-Mercator projection, an immutable `Viewport`, async tile loading (disk cache + memory LRU), grid clustering, hit-testing, the popup and overlays. |
+| `mtl_park_map/ui/` | The app: filter panel, legend, popups, background tasks (queries and geocoding never block the UI) and the main window. |
 
-## Run both servers (one command)
+Design notes:
+
+- **No database, no server.** The data is ~144k signs and ~20k spots, read-only, and
+  rebuilt offline. Each Apply queries the whole city on a worker thread. Panning and
+  zooming only re-cull and re-cluster in memory, so they never re-query.
+- **Clustering** buckets points on the *world* pixel grid of each zoom level. Clusters
+  stay stable while panning and are computed once per zoom (~5 ms for 100k points). It
+  is disabled from zoom 17, where every sign is drawn individually.
+- **Integer zoom**: 256 px tiles are drawn 1:1, so they stay crisp and seam-free. While
+  a tile loads, a scaled-up ancestor tile stands in for it.
+
+## Run
 
 ```bash
-uv sync && uv run python -m mtl_park_map.etl.build   # first time only: build parquet
-cd frontend && npm run dev:all                       # backend :8000 + frontend :5173
+uv sync                                   # also installs the app (editable) into .venv
+uv run python -m mtl_park_map.etl.build   # first time, and after refreshing data/raw
+uv run mtl-park-map                       # or: uv run python -m mtl_park_map
 ```
 
-Then open <http://localhost:5173> (Ctrl+C stops both). To run them individually, see below.
+IDEs work too, as long as they use the project's `.venv` interpreter.
 
-## Backend
+On launch the app shows permitted signs and paid spots for the next hour, today. The
+map reopens where you left it.
+
+| Action | How |
+|---|---|
+| Pan | Drag, or the arrow keys |
+| Zoom | Mouse wheel / trackpad (anchored at the cursor), double-click, `+` / `-`, or the on-map buttons |
+| Marker details | Click a dot (popup; `Esc` or click elsewhere to close) |
+| Expand a cluster | Click it |
+| Find an address | Type it in **Find address** and press Enter |
+| Change filters | Edit the panel, then **Apply** (enabled only when something changed). **Reset** returns to the defaults. |
+
+## Development
 
 ```bash
-uv sync
-uv run python -m mtl_park_map.etl.build          # raw CSVs -> data/curated/*.parquet
-uv run uvicorn mtl_park_map.main:app --port 8000 # API + docs at /docs
-uv run pytest                                    # tests
-uv run ruff check ; uv run ty check
+uv run pytest            # unit + headless Qt tests (QT_QPA_PLATFORM=offscreen)
+uv run ruff check
+uv run ty check
 ```
 
-## Frontend
-
-Requires the backend running on `:8000` (the dev server proxies `/api/*` to it).
-
-```bash
-cd frontend
-npm install
-npm run codegen     # regenerate the typed API client from ../openapi.json
-npm run dev         # http://localhost:5173 (frontend only)
-npm run dev:all     # frontend + backend together (concurrently)
-npm run test        # vitest
-npm run build
-```
-
-Regenerate `openapi.json` after backend schema changes:
-
-```bash
-uv run python -c "import json; from mtl_park_map.main import create_app; open('openapi.json','w',encoding='utf-8').write(json.dumps(create_app().openapi(), indent=2))"
-```
+The Qt tests never touch the network: tiles come from `file://` PNGs written to a temp
+dir, and the geocoder is a fake.
 
 ## Data sources
 
-- **Parking signs** — Montreal open data: `signalisation_stationnement.csv` plus the RPA/RTP
-  codification tables.
-- **Paid spots** — Agence de mobilité durable open data: `Places`, `Reglementations`,
-  `Periodes`, `EmplacementReglementation`, `ReglementationPeriode`.
+- **Parking signs**: Montreal open data `signalisation_stationnement.csv`, UTF-8. It is
+  large and git-ignored, so download it into `data/raw/` before running the ETL.
+- **Paid spots**: Agence de mobilité durable open data (`Places`, `Reglementations`,
+  `Periodes`, `EmplacementReglementation`, `ReglementationPeriode`), Windows-1252.
 
-Raw CSVs live in `data/raw/` (shared with the legacy app); curated parquet is generated into
-`data/curated/`.
+Raw CSVs live in `data/raw/`; the ETL detects each file's encoding and writes the
+curated parquet to `data/curated/` (git-ignored).
 
-## Legacy prototype
+## Third-party services
 
-The PySide6 + Folium + DuckDB desktop prototype is archived under `legacy/qt_app/` and reads
-the same shared `data/raw/`. It requires the optional `legacy` dependency group:
-
-```bash
-cd legacy/qt_app && uv run --group legacy python -m mtl_park_map.app.qt.main
-```
+- **Map tiles**: [OpenStreetMap](https://www.openstreetmap.org/copyright) standard tiles,
+  used under the [tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
+  The app sends an identifying `User-Agent`, honours HTTP caching through an on-disk
+  cache, fetches only visible tiles and shows the attribution.
+- **Geocoding**: [Nominatim](https://nominatim.org/), one request per user search, with
+  results biased to Montreal.

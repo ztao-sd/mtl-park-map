@@ -21,6 +21,16 @@ Range = tuple[float, float]
 
 
 def is_within_interval(child: Range, parent: Range, base: float) -> bool:
+    """Whether ``child`` lies inside ``parent`` on a wrapping axis of length ``base``.
+
+    Args:
+        child: Query interval; ``end < start`` wraps.
+        parent: Containing interval; ``end < start`` wraps.
+        base: Axis length (24 hours, 7 days, 12 months).
+
+    Returns:
+        True if every point of ``child`` is in ``parent``.
+    """
     start_, end_ = child
     start, end = parent
     if end < start:
@@ -39,6 +49,16 @@ def is_within_interval(child: Range, parent: Range, base: float) -> bool:
 
 
 def _any_within(query: Range, ranges: Sequence[Range], base: float) -> bool:
+    """Whether ``query`` fits inside at least one of ``ranges``.
+
+    Args:
+        query: Query interval.
+        ranges: Candidate containing intervals.
+        base: Axis length.
+
+    Returns:
+        True on the first containing range.
+    """
     return any(is_within_interval(query, r, base) for r in ranges)
 
 
@@ -50,6 +70,19 @@ def sign_active(
     q_day: Range | None,
     q_month: Range | None,
 ) -> bool:
+    """Whether a sign is active during the whole query window (see module doc).
+
+    Args:
+        hour_ranges: The sign's hour windows.
+        day_ranges: The sign's weekday windows.
+        month_ranges: The sign's month windows.
+        q_hour: Query hours, or ``None`` to ignore the dimension.
+        q_day: Query weekdays, or ``None``.
+        q_month: Query months, or ``None``.
+
+    Returns:
+        True when every constrained, queried dimension contains the query.
+    """
     checks: list[bool] = []
     if q_hour is not None and hour_ranges:
         checks.append(_any_within(q_hour, hour_ranges, 24.0))
@@ -69,6 +102,20 @@ def sign_matches(
     q_month: Range | None,
     not_in_range: bool,
 ) -> bool:
+    """:func:`sign_active`, optionally inverted.
+
+    Args:
+        hour_ranges: The sign's hour windows.
+        day_ranges: The sign's weekday windows.
+        month_ranges: The sign's month windows.
+        q_hour: Query hours, or ``None``.
+        q_day: Query weekdays, or ``None``.
+        q_month: Query months, or ``None``.
+        not_in_range: Return signs *not* active in the window instead.
+
+    Returns:
+        Whether the sign matches the query.
+    """
     active = sign_active(
         hour_ranges, day_ranges, month_ranges, q_hour, q_day, q_month
     )

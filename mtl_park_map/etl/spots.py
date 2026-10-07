@@ -25,12 +25,25 @@ _WEEKDAY_BITS = [
 
 
 def _hhmmss_to_hour(col: str) -> pl.Expr:
+    """``"HH:MM:SS"`` string column → fractional hours.
+
+    Args:
+        col: Column name.
+
+    Returns:
+        The hours expression.
+    """
     return pl.col(col).str.slice(0, 2).cast(pl.Float64) + pl.col(col).str.slice(
         3, 2
     ).cast(pl.Float64) / 60.0
 
 
 def _weekday_mask() -> pl.Expr:
+    """Fold the ``bLun`` … ``bDim`` 0/1 columns into a bitmask (bit 0 = Monday).
+
+    Returns:
+        The ``weekday_mask`` expression.
+    """
     expr = pl.lit(0)
     for col, weight in _WEEKDAY_BITS:
         expr = expr + pl.col(col).cast(pl.Int64) * weight
@@ -38,6 +51,14 @@ def _weekday_mask() -> pl.Expr:
 
 
 def build_spots(read_csv: Callable[[Path], pl.DataFrame]) -> pl.DataFrame:
+    """Join places with their metered periods.
+
+    Args:
+        read_csv: Reads a raw CSV as all-string columns.
+
+    Returns:
+        One row per place with a ``periods`` list (null when never metered).
+    """
     places = read_csv(settings.PLACES_CSV)
     place_link = read_csv(settings.EMPLACEMENT_CSV)
     period_link = read_csv(settings.REGLEMENTATION_PERIODE_CSV)

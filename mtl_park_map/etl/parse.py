@@ -7,6 +7,7 @@ functions run once per code at ETL time, never per request.
 """
 
 import re
+import unicodedata
 from enum import IntEnum
 
 from mtl_park_map.enums import (
@@ -37,7 +38,32 @@ _TOKENS = (
 _TOKEN_RE = re.compile(r"\b(" + "|".join(_TOKENS) + r")\b", flags=re.IGNORECASE)
 
 
+def fold_accents(text: str) -> str:
+    """Strip diacritics so French tokens match their unaccented enum names.
+
+    The raw descriptions write the range connector as ``À`` as often as ``A``
+    (``LUN À VEN``) and months as ``DÉC`` / ``AOÛT``; reserved signs say ``RÉSERVÉ``.
+
+    Args:
+        text: Raw description.
+
+    Returns:
+        The text with combining marks removed (``"RÉSERVÉ À"`` → ``"RESERVE A"``).
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def hour_to_float(hours: str, minutes: str) -> float:
+    """Convert matched ``HHhMM`` parts to fractional hours.
+
+    Args:
+        hours: Hour digits.
+        minutes: Minute digits, possibly empty (``"9h"``).
+
+    Returns:
+        E.g. ``("8", "30")`` → 8.5.
+    """
     return int(hours) + (int(minutes) / 60.0 if minutes else 0.0)
 
 
@@ -50,6 +76,15 @@ def extract_hour_ranges(description: str) -> list[tuple[float, float]]:
 
 
 def _lookup(token: str, enums: tuple[type[IntEnum], ...]) -> int | None:
+    """Value of the first enum having a member named ``token``.
+
+    Args:
+        token: Lower-case, unaccented token.
+        enums: Enums to search, in order.
+
+    Returns:
+        The member's value, or ``None``.
+    """
     for enum_type in enums:
         try:
             return enum_type[token].value
@@ -72,7 +107,7 @@ def extract_day_month_ranges(
     month_acc: list[int] = []
     is_range = False
 
-    for match in _TOKEN_RE.findall(description):
+    for match in _TOKEN_RE.findall(fold_accents(description)):
         upper = match.upper()
         if upper == "ET":
             continue
@@ -107,7 +142,7 @@ def extract_day_month_ranges(
 
 def classify(description: str) -> tuple[SignCategory, bool]:
     """``(category, is_reserved)`` from the leading ``\\P``/``\\A`` marker."""
-    stripped = description.strip()
+    stripped = fold_accents(description).strip()
     if stripped.startswith("\\P"):
         category = SignCategory.permitted
     elif stripped.startswith("\\A"):

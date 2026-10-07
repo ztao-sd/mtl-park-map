@@ -28,6 +28,16 @@ def mask_to_day_ranges(mask: int) -> list[Range]:
 
 
 def _period_covers(period: Period, q_hour: Range, q_day: Range) -> bool:
+    """Whether one metered period covers the whole query window.
+
+    Args:
+        period: ``(start_hour, end_hour, weekday_mask)``.
+        q_hour: Query hours.
+        q_day: Query weekdays.
+
+    Returns:
+        True if the meter runs during the entire window.
+    """
     start_hour, end_hour, mask = period
     day_ranges = mask_to_day_ranges(mask)
     if not any(is_within_interval(q_day, dr, 7.0) for dr in day_ranges):
@@ -36,4 +46,14 @@ def _period_covers(period: Period, q_hour: Range, q_day: Range) -> bool:
 
 
 def is_spot_free(periods: Sequence[Period], q_hour: Range, q_day: Range) -> bool:
+    """Whether a spot is free (no metered period covers the window).
+
+    Args:
+        periods: The spot's metered periods (empty = never metered).
+        q_hour: Query hours.
+        q_day: Query weekdays.
+
+    Returns:
+        True when parking there is free during the window.
+    """
     return not any(_period_covers(p, q_hour, q_day) for p in periods)
