@@ -13,6 +13,7 @@ wheels/
 /data/raw/signalisation_stationnement.csv
 /data/raw/signalisation-codification-rpa.csv
 /data/raw/signalisation-codification-rtp.csv
+/data/raw/geobase.json
 /data/curated/*.parquet
 
 # AI

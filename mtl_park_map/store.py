@@ -9,7 +9,11 @@ per row:
 
 - signs: once per sign *code* (~1.5k), then signs are filtered by ``code_id``;
 - spots: once per distinct set of metered periods (spots share regulations), then
-  the per-set verdicts are gathered back onto the spots.
+  the per-set verdicts are gathered back onto the spots;
+- strips: once per code, then each strip's ``code_ids`` list is filtered columnar-style.
+
+Strip geometry is precomputed by the ETL (:mod:`mtl_park_map.etl.strips`), so a strip
+query only evaluates time rules.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -17,8 +21,9 @@ from collections.abc import Iterable, Mapping, Sequence
 import polars as pl
 
 from mtl_park_map import settings
-from mtl_park_map.models import SignQuery, SpotQuery
+from mtl_park_map.models import SignQuery, SpotQuery, StripQuery
 from mtl_park_map.query.intervals import Range, sign_matches
+from mtl_park_map.query.overlap import rule_overlaps
 from mtl_park_map.query.paid import Period, is_spot_free
 
 # Result-frame contracts shared with the UI.
@@ -30,6 +35,9 @@ SIGN_COLUMNS = (
     "is_reserved",
     "arrondissement",
     "description",
+    "fleche",
+    "arrow_street",
+    "arrow_bearing",
 )
 SPOT_COLUMNS = (
     "place_id",
@@ -40,6 +48,24 @@ SPOT_COLUMNS = (
     "spot_type",
     "street",
     "periods",
+)
+STRIP_COLUMNS = (
+    "strip_id",
+    "street",
+    "side",
+    "length_m",
+    "longitudes",
+    "latitudes",
+    "min_lon",
+    "min_lat",
+    "max_lon",
+    "max_lat",
+    "pole_longitudes",
+    "pole_latitudes",
+    "rules",
+    "active_code_ids",
+    "is_restricted",
+    "is_inferred",
 )
 
 type _CodeRanges = tuple[list[Range], list[Range], list[Range]]
@@ -98,9 +124,17 @@ class Store:
         signs: Curated ``signs.parquet`` frame.
         codes: Curated ``codes.parquet`` frame (one row per sign code).
         spots: Curated ``spots.parquet`` frame.
+        strips: Curated ``strips.parquet`` frame (no-parking curb strips).
     """
 
-    def __init__(self, signs: pl.DataFrame, codes: pl.DataFrame, spots: pl.DataFrame):
+    def __init__(
+        self,
+        signs: pl.DataFrame,
+        codes: pl.DataFrame,
+        spots: pl.DataFrame,
+        strips: pl.DataFrame,
+    ):
+        self._strips = strips
         self._code_ranges: dict[int, _CodeRanges] = {
             row["code_id"]: (
                 _to_ranges(row["hour_ranges"]),
@@ -131,15 +165,20 @@ class Store:
         Raises:
             FileNotFoundError: If the ETL has not been run yet.
         """
-        paths = (settings.SIGNS_PARQUET, settings.CODES_PARQUET, settings.SPOTS_PARQUET)
+        paths = (
+            settings.SIGNS_PARQUET,
+            settings.CODES_PARQUET,
+            settings.SPOTS_PARQUET,
+            settings.STRIPS_PARQUET,
+        )
         missing = [str(p) for p in paths if not p.exists()]
         if missing:
             raise FileNotFoundError(
                 f"Curated data not found ({', '.join(missing)}). "
                 f"Build it first with: {settings.ETL_COMMAND}"
             )
-        signs, codes, spots = (pl.read_parquet(p) for p in paths)
-        return cls(signs, codes, spots)
+        signs, codes, spots, strips = (pl.read_parquet(p) for p in paths)
+        return cls(signs, codes, spots, strips)
 
     def query_signs(self, q: SignQuery) -> pl.DataFrame:
         """Signs matching the query, anywhere in the city.
@@ -185,3 +224,38 @@ class Store:
             )
             is_free = free_per_set.gather(self._spot_set_ids)
         return self._spots.with_columns(is_free.alias("is_free")).select(SPOT_COLUMNS)
+
+    def query_strips(self, q: StripQuery) -> pl.DataFrame:
+        """All no-parking curb strips with their status for the query window.
+
+        Args:
+            q: The time window (a strip is restricted when any of its rules applies
+                at some moment of it) and an optional status filter.
+
+        Returns:
+            A frame with columns :data:`STRIP_COLUMNS`; ``active_code_ids`` lists the
+            rules applying during the window, ``is_restricted`` whether there is any.
+        """
+        w = q.window
+        active = [
+            code_id
+            for code_id, (hours, days, months) in self._code_ranges.items()
+            if rule_overlaps(hours, days, months, w.hour, w.day, w.month)
+        ]
+        df = self._strips
+        if not q.include_inferred:
+            df = df.with_columns(
+                pl.col("code_ids").list.set_difference("inferred_code_ids"),
+                pl.col("rules").list.eval(
+                    pl.element().filter(~pl.element().struct.field("inferred"))
+                ),
+                pl.lit(False).alias("is_inferred"),
+            ).filter(pl.col("code_ids").list.len() > 0)
+        df = df.with_columns(
+            pl.col("code_ids")
+            .list.eval(pl.element().filter(pl.element().is_in(active)))
+            .alias("active_code_ids")
+        ).with_columns((pl.col("active_code_ids").list.len() > 0).alias("is_restricted"))
+        if q.restricted is not None:
+            df = df.filter(pl.col("is_restricted") == q.restricted)
+        return df.select(STRIP_COLUMNS)

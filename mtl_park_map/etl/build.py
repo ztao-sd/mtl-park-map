@@ -10,24 +10,29 @@ from pathlib import Path
 import polars as pl
 
 from mtl_park_map import settings
+from mtl_park_map.etl.arrows import sign_arrows
+from mtl_park_map.etl.dtypes import HOUR_RANGES, INT_RANGES
 from mtl_park_map.etl.parse import (
     classify,
     extract_day_month_ranges,
     extract_hour_ranges,
+    sign_kind,
 )
 from mtl_park_map.etl.spots import build_spots
+from mtl_park_map.etl.streets import load_streets
+from mtl_park_map.etl.strips import build_strips
 
-_HOUR_RANGE = pl.List(pl.Struct({"start": pl.Float64, "end": pl.Float64}))
-_INT_RANGE = pl.List(pl.Struct({"start": pl.Int64, "end": pl.Int64}))
+_INSTALLED_STATUS = "Réel"  # DESCRIPTION_REP of panels physically on the street
 _CODES_SCHEMA = {
     "code_id": pl.UInt32,
     "code_rpa": pl.Utf8,
     "description": pl.Utf8,
     "category": pl.Utf8,
+    "kind": pl.Utf8,
     "is_reserved": pl.Boolean,
-    "hour_ranges": _HOUR_RANGE,
-    "day_ranges": _INT_RANGE,
-    "month_ranges": _INT_RANGE,
+    "hour_ranges": HOUR_RANGES,
+    "day_ranges": INT_RANGES,
+    "month_ranges": INT_RANGES,
 }
 
 
@@ -72,7 +77,11 @@ def build_signs() -> tuple[pl.DataFrame, pl.DataFrame]:
     Returns:
         ``(signs, codes)`` frames for ``signs.parquet`` and ``codes.parquet``.
     """
-    raw = read_raw_csv(settings.SIGN_CSV)
+    # The inventory also lists removed ("Enlevé"), planned ("En conception") and
+    # archived panels (~18% of rows); only installed ("Réel") ones are on the street.
+    raw = read_raw_csv(settings.SIGN_CSV).filter(
+        pl.col("DESCRIPTION_REP") == _INSTALLED_STATUS
+    )
 
     codes = (
         raw.select("CODE_RPA", "DESCRIPTION_RPA")
@@ -93,6 +102,7 @@ def build_signs() -> tuple[pl.DataFrame, pl.DataFrame]:
                 "code_rpa": row["CODE_RPA"],
                 "description": description,
                 "category": category.value,
+                "kind": sign_kind(description).value,
                 "is_reserved": is_reserved,
                 "hour_ranges": _struct_list(extract_hour_ranges(description)),
                 "day_ranges": _struct_list(days),
@@ -102,9 +112,13 @@ def build_signs() -> tuple[pl.DataFrame, pl.DataFrame]:
     codes_df = pl.DataFrame(parsed, schema=_CODES_SCHEMA)
 
     signs = (
-        raw.select("CODE_RPA", "Longitude", "Latitude", "NOM_ARROND", "FLECHE_PAN")
+        raw.select(
+            "POTEAU_ID_POT", "CODE_RPA", "Longitude", "Latitude", "NOM_ARROND", "FLECHE_PAN"
+        )
         .drop_nulls(["CODE_RPA", "Longitude", "Latitude"])
         .with_columns(
+            # Panels on the same pole share its id and position.
+            pl.col("POTEAU_ID_POT").cast(pl.Int64).alias("pole_id"),
             pl.col("Longitude").cast(pl.Float64).alias("longitude"),
             pl.col("Latitude").cast(pl.Float64).alias("latitude"),
         )
@@ -118,6 +132,7 @@ def build_signs() -> tuple[pl.DataFrame, pl.DataFrame]:
         .with_row_index("sign_id")
         .select(
             "sign_id",
+            "pole_id",
             "longitude",
             "latitude",
             "arrondissement",
@@ -132,23 +147,46 @@ def build_signs() -> tuple[pl.DataFrame, pl.DataFrame]:
 
 def main() -> None:
     """Build all curated parquet files and print summary counts."""
+    if not settings.GEOBASE_JSON.exists():
+        raise SystemExit(
+            f"Missing {settings.GEOBASE_JSON}. Download the city's road network first:\n"
+            f'  curl -L -o "{settings.GEOBASE_JSON}" "{settings.GEOBASE_URL}"'
+        )
     settings.CURATED_DIR.mkdir(parents=True, exist_ok=True)
 
     signs, codes = build_signs()
     spots = build_spots(read_raw_csv)
+    network = load_streets(settings.GEOBASE_JSON)
+    strips, strip_report = build_strips(signs, codes, network)
+    # Where each arrowed sign points on the map (street + compass bearing).
+    signs = signs.join(sign_arrows(signs, network), on="sign_id", how="left")
 
     signs.write_parquet(settings.SIGNS_PARQUET)
     codes.write_parquet(settings.CODES_PARQUET)
     spots.write_parquet(settings.SPOTS_PARQUET)
+    strips.write_parquet(settings.STRIPS_PARQUET)
 
     print(f"codes:  {codes.height}")
     print(f"signs:  {signs.height}")
     print(signs["category"].value_counts().sort("category"))
     reserved = int(signs["is_reserved"].sum())
     print(f"reserved signs: {reserved}")
+    oriented = signs["arrow_bearing"].is_not_null().sum()
+    print(f"signs with an arrow oriented on the map: {oriented}")
     print(f"spots:  {spots.height}")
     with_periods = spots.filter(pl.col("periods").is_not_null()).height
     print(f"spots with >=1 paid period: {with_periods}")
+    r = strip_report
+    print(
+        f"no-parking strips: {r.strips} ({r.total_km:.0f} km) from {r.panels_snapped}/"
+        f"{r.panels} arrowed no-parking panels ({r.panels_snapped / max(r.panels, 1):.1%} "
+        f"snapped); "
+        f"{r.poles_ambiguous} of {r.poles} poles at ambiguous corners"
+    )
+    print(
+        f"  of which {r.inferred_km:.0f} km inferred from {r.inferred_panels} "
+        f"no-parking panels without arrows"
+    )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ dependencies = [
     "polars>=1.42.0",
     "geopy>=2.4.1",
     "pyside6-essentials>=6.10.0",
+    "shapely>=2.1",
 ]
 
 [project.scripts]

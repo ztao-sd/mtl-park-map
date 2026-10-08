@@ -8,8 +8,11 @@ from mtl_park_map.ui.filters import (
     FilterState,
     default_filters,
     hour_of,
+    restore_options,
+    saved_options,
     to_sign_query,
     to_spot_query,
+    to_strip_query,
     window_is_complete,
 )
 
@@ -25,7 +28,8 @@ def test_hour_of():
 def test_default_filters_are_now_for_one_hour():
     f = default_filters(TUESDAY_MORNING)
     assert f.show_signs and f.show_spots
-    assert f.categories == frozenset({SignCategory.permitted})
+    # no-parking signs are the most informative ones, so they are on by default
+    assert f.categories == frozenset({SignCategory.permitted, SignCategory.prohibited})
     assert f.reserved is None
     assert f.hours == (time(10, 7), time(11, 7))
     assert f.days == (2, 2)
@@ -72,3 +76,98 @@ def test_window_is_complete(
     hours: tuple[time, time] | None, days: tuple[int, int] | None, complete: bool
 ):
     assert window_is_complete(FilterState(hours=hours, days=days)) is complete
+
+
+def test_strips_are_shown_by_default_and_query_all_dimensions():
+    f = default_filters(TUESDAY_MORNING)
+    assert f.show_strips
+    window = to_strip_query(f).window
+    assert window == TimeWindow(hour=(10 + 7 / 60, 11 + 7 / 60), day=(2, 2), month=(10, 10))
+
+
+@pytest.mark.parametrize("restricted", [None, True, False])
+def test_strip_status_maps_to_query(restricted: bool | None):
+    f = FilterState(strip_restricted=restricted)
+    assert to_strip_query(f).restricted is restricted
+
+
+def test_strip_status_defaults_to_all():
+    assert default_filters(TUESDAY_MORNING).strip_restricted is None
+
+
+def test_signs_can_ignore_the_time_window():
+    f = FilterState(
+        hours=(time(20, 0), time(21, 0)),
+        days=(2, 2),
+        months=(10, 10),
+        not_in_range=True,
+        signs_ignore_time=True,
+    )
+    q = to_sign_query(f)
+    assert q.window == TimeWindow() and not q.not_in_range
+    # spots and strips still use the window
+    assert to_spot_query(f).window == TimeWindow(hour=(20.0, 21.0), day=(2, 2))
+    assert to_strip_query(f).window.hour == (20.0, 21.0)
+
+
+def test_signs_follow_the_time_window_by_default():
+    assert not default_filters(TUESDAY_MORNING).signs_ignore_time
+
+
+def test_inferred_strips_are_included_by_default_and_can_be_left_out():
+    assert to_strip_query(default_filters(TUESDAY_MORNING)).include_inferred
+    assert not to_strip_query(FilterState(include_inferred_strips=False)).include_inferred
+
+
+# --- persistence of the non-time options ---------------------------------------------
+
+
+def _customised() -> FilterState:
+    return FilterState(
+        show_signs=False,
+        show_spots=True,
+        show_strips=False,
+        categories=frozenset({SignCategory.other}),
+        reserved=True,
+        strip_restricted=False,
+        include_inferred_strips=False,
+        signs_ignore_time=True,
+        hours=(time(1, 0), time(2, 0)),
+        days=(7, 7),
+        months=(1, 1),
+        not_in_range=True,
+    )
+
+
+def test_saved_options_exclude_the_time_window():
+    saved = saved_options(_customised())
+    assert not {"hours", "days", "months", "not_in_range"} & saved.keys()
+    assert saved["categories"] == ["other"]
+
+
+def test_restore_keeps_todays_window_and_the_saved_options():
+    today = default_filters(TUESDAY_MORNING)
+    restored = restore_options(today, saved_options(_customised()))
+    assert (restored.hours, restored.days, restored.months) == (today.hours, today.days, today.months)
+    assert not restored.not_in_range
+    customised = _customised()
+    for field in ("show_signs", "show_spots", "show_strips", "categories", "reserved",
+                  "strip_restricted", "include_inferred_strips", "signs_ignore_time"):
+        assert getattr(restored, field) == getattr(customised, field), field
+
+
+def test_restore_ignores_bad_values_field_by_field():
+    today = default_filters(TUESDAY_MORNING)
+    restored = restore_options(
+        today,
+        {"show_signs": "yes", "categories": ["permitted", "bogus"], "reserved": 3, "show_spots": False},
+    )
+    assert restored.show_signs == today.show_signs  # wrong type -> default
+    assert restored.categories == today.categories  # unknown category -> default
+    assert restored.reserved == today.reserved
+    assert restored.show_spots is False  # valid fields still apply
+
+
+def test_restore_from_nothing_is_the_defaults():
+    today = default_filters(TUESDAY_MORNING)
+    assert restore_options(today, {}) == today

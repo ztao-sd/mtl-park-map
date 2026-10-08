@@ -53,3 +53,23 @@ class SpotQuery:
     """
 
     window: TimeWindow = TimeWindow()
+
+
+@dataclass(frozen=True, slots=True)
+class StripQuery:
+    """Which time window to evaluate no-parking curb strips for.
+
+    Attributes:
+        window: A strip is restricted when any of its rules applies at *some* moment
+            of the window (overlap, unlike signs' containment test); dimensions left
+            ``None`` are open, so an empty window means "at any time".
+        restricted: ``None`` for all strips, ``True`` for no-parking strips only,
+            ``False`` for parkable strips only (status during ``window``).
+        include_inferred: Whether rules whose extent was inferred from signs
+            without arrows count; if not, they are dropped from every strip and
+            strips left without rules disappear.
+    """
+
+    window: TimeWindow = TimeWindow()
+    restricted: bool | None = None
+    include_inferred: bool = True

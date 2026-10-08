@@ -58,22 +58,30 @@ def test_clamp_zoom():
     assert _vp(zoom=3).clamped(bounds, 11, 19).zoom == 11
 
 
-def test_clamp_keeps_viewport_inside_bounds():
+def test_clamp_keeps_centre_inside_bounds():
     x, y = MONTREAL
     bounds = (x - 0.01, y - 0.01, x + 0.01, y + 0.01)
-    vp = Viewport(center=(x + 0.05, y), zoom=14, width=800, height=600).clamped(
-        bounds, 11, 19
-    )
-    min_x, _, max_x, _ = vp.world_rect()
-    assert max_x == pytest.approx(bounds[2])
-    assert min_x > bounds[0]
+    vp = Viewport(center=(x + 0.05, y - 0.05), zoom=14, width=800, height=600)
+    assert vp.clamped(bounds, 11, 19).center == pytest.approx((x + 0.01, y - 0.01))
 
 
-def test_clamp_centres_when_viewport_larger_than_bounds():
+def test_clamp_lets_view_extend_half_a_screen_past_bounds():
+    # any point of the bounds can be brought to the screen centre, so up to half a
+    # screen of surroundings shows beyond the edge -- even when the bounds are
+    # smaller than the screen (zoomed out), the view can still be dragged
     x, y = MONTREAL
     bounds = (x - 1e-4, y - 1e-4, x + 1e-4, y + 1e-4)
-    vp = Viewport(center=(x + 0.05, y + 0.05), zoom=12, width=800, height=600)
-    assert vp.clamped(bounds, 11, 19).center == pytest.approx((x, y))
+    vp = Viewport(center=(x + 1e-4, y), zoom=12, width=800, height=600)
+    clamped = vp.clamped(bounds, 11, 19)
+    assert clamped.center == pytest.approx((x + 1e-4, y))
+    assert clamped.world_rect()[0] == pytest.approx(bounds[2] - 400 / vp.scale)
+
+
+def test_clamp_leaves_centre_inside_bounds_untouched():
+    x, y = MONTREAL
+    bounds = (x - 0.01, y - 0.01, x + 0.01, y + 0.01)
+    vp = Viewport(center=(x + 0.005, y), zoom=14, width=800, height=600)
+    assert vp.clamped(bounds, 11, 19) == vp
 
 
 def test_visible_tiles_cover_viewport_exactly():
@@ -107,3 +115,88 @@ def test_visible_tiles_stay_inside_world():
     tiles = vp.visible_tiles()
     assert min(t.x for t in tiles) == 0 and min(t.y for t in tiles) == 0
     assert all(0 <= t.x < 8 and 0 <= t.y < 8 for t in tiles)
+
+
+# --- rotation ---------------------------------------------------------------------
+
+BEARINGS = [0.0, 30.0, 90.0, 200.0, 315.0]
+
+
+def _rvp(bearing: float, zoom: int = 12) -> Viewport:
+    return Viewport(center=MONTREAL, zoom=zoom, width=800, height=600, bearing=bearing)
+
+
+def test_bearing_defaults_to_north_up():
+    assert _vp().bearing == 0.0
+
+
+def test_bearing_is_the_direction_at_the_top_of_the_screen():
+    vp = _rvp(90.0)  # east up
+    d = 50 / vp.scale
+    x, y = MONTREAL
+    assert vp.world_to_screen(x + d, y) == pytest.approx((400.0, 250.0))  # east: above
+    assert vp.world_to_screen(x, y - d) == pytest.approx((350.0, 300.0))  # north: left
+    assert _rvp(180.0).world_to_screen(x, y - d) == pytest.approx((400.0, 350.0))  # north: below
+
+
+@pytest.mark.parametrize("bearing", BEARINGS)
+def test_rotated_round_trip(bearing: float):
+    vp = _rvp(bearing)
+    assert vp.world_to_screen(*vp.screen_to_world(123.0, 456.0)) == pytest.approx((123.0, 456.0))
+    assert vp.world_to_screen(*MONTREAL) == pytest.approx((400.0, 300.0))
+
+
+@pytest.mark.parametrize("bearing", BEARINGS)
+def test_rotated_pan_moves_content_with_the_drag(bearing: float):
+    vp = _rvp(bearing)
+    world_pt = vp.screen_to_world(100.0, 100.0)
+    assert vp.panned(50.0, -20.0).world_to_screen(*world_pt) == pytest.approx((150.0, 80.0))
+
+
+@pytest.mark.parametrize("bearing", BEARINGS)
+def test_rotated_zoom_keeps_anchor_under_cursor(bearing: float):
+    vp = _rvp(bearing)
+    anchor = vp.screen_to_world(200.0, 450.0)
+    zoomed = vp.zoomed_at(200.0, 450.0, 14)
+    assert zoomed.bearing == bearing
+    assert zoomed.world_to_screen(*anchor) == pytest.approx((200.0, 450.0))
+
+
+@pytest.mark.parametrize(("bearing", "expected"), [(-30.0, 330.0), (370.0, 10.0), (360.0, 0.0)])
+def test_with_bearing_normalizes_and_keeps_centre(bearing: float, expected: float):
+    vp = _vp().with_bearing(bearing)
+    assert vp.bearing == pytest.approx(expected)
+    assert vp.center == MONTREAL
+
+
+def test_clamp_keeps_bearing():
+    assert _rvp(45.0).clamped((0.0, 0.0, 1.0, 1.0), 11, 19).bearing == 45.0
+
+
+@pytest.mark.parametrize("bearing", BEARINGS)
+def test_rotated_world_rect_contains_every_screen_corner(bearing: float):
+    vp = _rvp(bearing)
+    min_x, min_y, max_x, max_y = vp.world_rect()
+    for sx, sy in [(0, 0), (800, 0), (0, 600), (800, 600)]:
+        x, y = vp.screen_to_world(sx, sy)
+        assert min_x - 1e-12 <= x <= max_x + 1e-12 and min_y - 1e-12 <= y <= max_y + 1e-12
+
+
+@pytest.mark.parametrize("bearing", BEARINGS)
+def test_rotated_visible_tiles_cover_every_screen_pixel(bearing: float):
+    vp = _rvp(bearing)
+    tiles = {(t.x, t.y) for t in vp.visible_tiles()}
+    n = 2**vp.zoom
+    for sx in range(0, 801, 25):
+        for sy in range(0, 601, 25):
+            x, y = vp.screen_to_world(sx, sy)
+            assert (int(x * n), int(y * n)) in tiles
+
+
+def test_rotated_visible_tiles_skip_tiles_outside_the_view():
+    # the rotated view's bounding box holds more tiles than the view itself touches
+    vp = _rvp(45.0)
+    n = 2**vp.zoom
+    min_x, min_y, max_x, max_y = vp.world_rect()
+    bbox_tiles = (int(max_x * n) - int(min_x * n) + 1) * (int(max_y * n) - int(min_y * n) + 1)
+    assert len(vp.visible_tiles()) < bbox_tiles

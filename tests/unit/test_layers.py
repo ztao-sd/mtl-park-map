@@ -75,3 +75,13 @@ def test_cluster_radius_grows_and_caps():
     assert cluster_radius(1, 5.0) == 5.0
     assert 5.0 < cluster_radius(2, 5.0) < cluster_radius(50, 5.0)
     assert cluster_radius(10**6, 5.0) == cluster_radius(10**7, 5.0)
+
+
+def test_screen_clusters_follow_the_bearing():
+    north_up = _vp()
+    layer = _layer_at_screen(north_up, (500, 300))  # 100 px east of the centre
+    east_up = Viewport(center=CENTER, zoom=18, width=800, height=600, bearing=90.0)
+    row = layer.screen_clusters(east_up).row(0, named=True)
+    assert (row["sx"], row["sy"]) == pytest.approx((400.0, 200.0))  # now above
+    hit = layer.hit_test(east_up, 401.0, 201.0)
+    assert hit is not None and hit.idx == 0

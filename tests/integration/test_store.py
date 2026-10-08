@@ -5,8 +5,8 @@ import pytest
 
 from mtl_park_map import settings
 from mtl_park_map.enums import SignCategory
-from mtl_park_map.models import SignQuery, SpotQuery, TimeWindow
-from mtl_park_map.store import SIGN_COLUMNS, SPOT_COLUMNS, Store
+from mtl_park_map.models import SignQuery, SpotQuery, StripQuery, TimeWindow
+from mtl_park_map.store import SIGN_COLUMNS, SPOT_COLUMNS, STRIP_COLUMNS, Store
 
 WEEKDAY_MORNING = TimeWindow(hour=(10.0, 11.0), day=(1, 5))
 WEEKDAY_EVENING = TimeWindow(hour=(20.0, 21.0), day=(1, 5))
@@ -47,7 +47,7 @@ def test_reserved_filter(store: Store):
 
 def test_description_and_arrondissement_are_joined(store: Store):
     row = store.query_signs(SignQuery()).filter(pl.col("sign_id") == 0).row(0, named=True)
-    assert row["description"] == r"\P 9h-17h LUN A VEN"
+    assert row["description"] == "P 60 min 9h-17h LUN A VEN"
     assert row["arrondissement"] == "A"
 
 
@@ -95,3 +95,69 @@ def test_load_missing_parquet_names_etl_command(
     monkeypatch.setattr(settings, "SIGNS_PARQUET", tmp_path / "missing.parquet")
     with pytest.raises(FileNotFoundError, match="mtl_park_map.etl.build"):
         Store.load()
+
+
+# --- no-parking strips ------------------------------------------------------------
+
+TUESDAY_10_11 = TimeWindow(hour=(10.0, 11.0), day=(2, 2))
+
+
+def _restricted(store: Store, window: TimeWindow) -> dict[int, bool]:
+    df = store.query_strips(StripQuery(window=window))
+    return dict(zip(df["strip_id"].to_list(), df["is_restricted"].to_list(), strict=True))
+
+
+def test_strip_result_columns(store: Store):
+    assert store.query_strips(StripQuery()).columns == list(STRIP_COLUMNS)
+
+
+def test_strip_restricted_when_a_rule_overlaps_the_window(store: Store):
+    # strips 0 and 2: no parking Tuesdays 8-11; strip 1: no parking at any time
+    assert _restricted(store, TUESDAY_10_11) == {0: True, 1: True, 2: True}
+    wednesday = TimeWindow(hour=(10.0, 11.0), day=(3, 3))
+    assert _restricted(store, wednesday) == {0: False, 1: True, 2: False}
+
+
+def test_strip_partial_overlap_restricts_but_touching_does_not(store: Store):
+    # a stay from 10:30 to noon on Tuesday still hits the 8-11 ban...
+    assert _restricted(store, TimeWindow(hour=(10.5, 12.0), day=(2, 2)))[0]
+    # ...one starting when it ends does not
+    assert not _restricted(store, TimeWindow(hour=(11.0, 12.0), day=(2, 2)))[0]
+
+
+def test_strip_active_rules_are_listed(store: Store):
+    df = store.query_strips(StripQuery(window=TimeWindow(hour=(10.0, 11.0), day=(3, 3))))
+    active = dict(zip(df["strip_id"].to_list(), df["active_code_ids"].to_list(), strict=True))
+    assert active == {0: [], 1: [4], 2: []}
+
+
+def test_strip_without_window_counts_any_time(store: Store):
+    # with no time filter, every rule applies at *some* time
+    assert all(_restricted(store, TimeWindow()).values())
+
+
+def test_strip_status_filter(store: Store):
+    wednesday = TimeWindow(hour=(10.0, 11.0), day=(3, 3))  # only strip 1 restricted
+    parkable = store.query_strips(StripQuery(window=wednesday, restricted=False))
+    restricted = store.query_strips(StripQuery(window=wednesday, restricted=True))
+    assert parkable["strip_id"].to_list() == [0, 2]
+    assert restricted["strip_id"].to_list() == [1]
+    assert store.query_strips(StripQuery(window=wednesday)).height == 3  # None: all
+
+
+def test_strips_can_leave_out_inferred_extents(store: Store):
+    df = store.query_strips(StripQuery(window=TUESDAY_10_11, include_inferred=False))
+    rows = {r["strip_id"]: r for r in df.iter_rows(named=True)}
+    assert set(rows) == {0, 1}  # strip 2 existed by inference alone
+    # strip 1 keeps only its arrow-derived rule
+    assert rows[1]["active_code_ids"] == [4]
+    assert [r["code_id"] for r in rows[1]["rules"]] == [4]
+    assert not any(r["is_inferred"] for r in rows.values())
+
+
+def test_strips_include_inferred_by_default(store: Store):
+    df = store.query_strips(StripQuery(window=TUESDAY_10_11))
+    inferred = dict(zip(df["strip_id"].to_list(), df["is_inferred"].to_list(), strict=True))
+    assert inferred == {0: False, 1: False, 2: True}
+    rows = {r["strip_id"]: r for r in df.iter_rows(named=True)}
+    assert sorted(rows[1]["active_code_ids"]) == [3, 4]

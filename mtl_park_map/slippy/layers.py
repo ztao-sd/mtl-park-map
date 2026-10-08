@@ -136,16 +136,10 @@ class MarkerLayer:
         Returns:
             Columns ``sx``, ``sy``, ``count``, ``idx``.
         """
-        cx, cy = vp.center
-        scale = vp.scale
+        sx, sy = vp.screen_exprs(pl.col("x"), pl.col("y"))
         return (
             self.clusters(vp.zoom)
-            .select(
-                ((pl.col("x") - cx) * scale + vp.width / 2).alias("sx"),
-                ((pl.col("y") - cy) * scale + vp.height / 2).alias("sy"),
-                "count",
-                "idx",
-            )
+            .select(sx.alias("sx"), sy.alias("sy"), "count", "idx")
             .filter(
                 pl.col("sx").is_between(-margin_px, vp.width + margin_px),
                 pl.col("sy").is_between(-margin_px, vp.height + margin_px),

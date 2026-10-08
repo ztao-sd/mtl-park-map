@@ -64,8 +64,18 @@ class MonthAbbreviation(IntEnum):
 
 
 class SignCategory(StrEnum):
-    """Whether a sign permits parking (``\\P``), prohibits it (``\\A``) or neither."""
+    """Whether a sign permits parking (plain ``P``), prohibits it (``\\P`` no parking,
+    ``\\A`` no stopping) or neither (see :func:`mtl_park_map.etl.parse.classify`)."""
 
     permitted = "permitted"
     prohibited = "prohibited"
+    other = "other"
+
+
+class SignKind(StrEnum):
+    """The pictogram a sign shows, finer-grained than :class:`SignCategory`."""
+
+    no_parking = "no_parking"  # struck-through P: "\P …"
+    no_stopping = "no_stopping"  # struck-through A: "\A …"
+    parking = "parking"  # plain P: "P 60 min …"
     other = "other"
