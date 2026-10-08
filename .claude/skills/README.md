@@ -21,10 +21,10 @@ This guides you through building a new skill with:
 ### `/verify-map` — End-to-end map feature verification
 - **When:** Before merging map rendering changes
 - **Prompt:** "Drive the map UI, test zoom, pan, pin placement, marker info, responsiveness"
-- **Tools:** Run dev server, browser navigation, screenshots
+- **Tools:** Headless Qt run (`QT_QPA_PLATFORM=offscreen`), `QWidget.grab()` screenshots
 
-### `/api-test` — Integration test suite runner
-- **When:** Testing FastAPI endpoints
+### `/store-test` — Integration test suite runner
+- **When:** Testing `Store` queries and the ETL
 - **Prompt:** "Run integration tests, report coverage gaps, suggest new tests"
 - **Tools:** Bash, file read/write
 
@@ -40,7 +40,7 @@ This guides you through building a new skill with:
 Once created, invoke them like built-in skills:
 ```
 /verify-map
-/api-test
+/store-test
 /data-import-check
 ```
 

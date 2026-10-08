@@ -1,7 +1,11 @@
+"""French day/month vocabulary of the raw sign descriptions, and sign categories."""
+
 from enum import IntEnum, StrEnum
 
 
 class Day(IntEnum):
+    """French weekday names → ISO weekday number."""
+
     lundi = 1
     mardi = 2
     mercredi = 3
@@ -12,6 +16,8 @@ class Day(IntEnum):
 
 
 class DayAbbreviation(IntEnum):
+    """French weekday abbreviations → ISO weekday number."""
+
     lun = 1
     mar = 2
     mer = 3
@@ -22,6 +28,8 @@ class DayAbbreviation(IntEnum):
 
 
 class Month(IntEnum):
+    """French month names (unaccented) → month number."""
+
     janvier = 1
     fevrier = 2
     mars = 3
@@ -37,6 +45,8 @@ class Month(IntEnum):
 
 
 class MonthAbbreviation(IntEnum):
+    """French month abbreviations (unaccented) → month number."""
+
     jan = 1
     fev = 2
     mar = 3
@@ -54,6 +64,18 @@ class MonthAbbreviation(IntEnum):
 
 
 class SignCategory(StrEnum):
+    """Whether a sign permits parking (plain ``P``), prohibits it (``\\P`` no parking,
+    ``\\A`` no stopping) or neither (see :func:`mtl_park_map.etl.parse.classify`)."""
+
     permitted = "permitted"
     prohibited = "prohibited"
+    other = "other"
+
+
+class SignKind(StrEnum):
+    """The pictogram a sign shows, finer-grained than :class:`SignCategory`."""
+
+    no_parking = "no_parking"  # struck-through P: "\P …"
+    no_stopping = "no_stopping"  # struck-through A: "\A …"
+    parking = "parking"  # plain P: "P 60 min …"
     other = "other"

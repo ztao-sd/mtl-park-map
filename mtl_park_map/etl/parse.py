@@ -7,6 +7,7 @@ functions run once per code at ETL time, never per request.
 """
 
 import re
+import unicodedata
 from enum import IntEnum
 
 from mtl_park_map.enums import (
@@ -15,6 +16,7 @@ from mtl_park_map.enums import (
     Month,
     MonthAbbreviation,
     SignCategory,
+    SignKind,
 )
 
 _DAY_ENUMS: tuple[type[IntEnum], ...] = (Day, DayAbbreviation)
@@ -36,8 +38,41 @@ _TOKENS = (
 )
 _TOKEN_RE = re.compile(r"\b(" + "|".join(_TOKENS) + r")\b", flags=re.IGNORECASE)
 
+# Struck-through P / A pictograms. The raw data also writes them lowercase, with a
+# doubled backslash, or without the following space ("\p 8h", "\\P 9h", "\P13H").
+_NO_PARKING_RE = re.compile(r"\\+P", flags=re.IGNORECASE)
+_NO_STOPPING_RE = re.compile(r"\\+A", flags=re.IGNORECASE)
+# Plain P pictogram: a P on its own ("P 60 min", "P15 min"), not a word starting
+# with P such as PANONCEAU or PARCOMETRE.
+_PERMITTED_RE = re.compile(r"P(?![A-Z])", flags=re.IGNORECASE)
+
+
+def fold_accents(text: str) -> str:
+    """Strip diacritics so French tokens match their unaccented enum names.
+
+    The raw descriptions write the range connector as ``À`` as often as ``A``
+    (``LUN À VEN``) and months as ``DÉC`` / ``AOÛT``; reserved signs say ``RÉSERVÉ``.
+
+    Args:
+        text: Raw description.
+
+    Returns:
+        The text with combining marks removed (``"RÉSERVÉ À"`` → ``"RESERVE A"``).
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
 
 def hour_to_float(hours: str, minutes: str) -> float:
+    """Convert matched ``HHhMM`` parts to fractional hours.
+
+    Args:
+        hours: Hour digits.
+        minutes: Minute digits, possibly empty (``"9h"``).
+
+    Returns:
+        E.g. ``("8", "30")`` → 8.5.
+    """
     return int(hours) + (int(minutes) / 60.0 if minutes else 0.0)
 
 
@@ -50,6 +85,15 @@ def extract_hour_ranges(description: str) -> list[tuple[float, float]]:
 
 
 def _lookup(token: str, enums: tuple[type[IntEnum], ...]) -> int | None:
+    """Value of the first enum having a member named ``token``.
+
+    Args:
+        token: Lower-case, unaccented token.
+        enums: Enums to search, in order.
+
+    Returns:
+        The member's value, or ``None``.
+    """
     for enum_type in enums:
         try:
             return enum_type[token].value
@@ -72,7 +116,7 @@ def extract_day_month_ranges(
     month_acc: list[int] = []
     is_range = False
 
-    for match in _TOKEN_RE.findall(description):
+    for match in _TOKEN_RE.findall(fold_accents(description)):
         upper = match.upper()
         if upper == "ET":
             continue
@@ -106,12 +150,46 @@ def extract_day_month_ranges(
 
 
 def classify(description: str) -> tuple[SignCategory, bool]:
-    """``(category, is_reserved)`` from the leading ``\\P``/``\\A`` marker."""
-    stripped = description.strip()
-    if stripped.startswith("\\P"):
-        category = SignCategory.permitted
-    elif stripped.startswith("\\A"):
-        category = SignCategory.prohibited
-    else:
-        category = SignCategory.other
-    return category, "RESERVE" in stripped.upper()
+    """``(category, is_reserved)`` from the sign's leading pictogram code.
+
+    - ``\\P …`` (struck-through P, no parking) and ``\\A …`` (struck-through A,
+      no stopping) → prohibited during the stated times;
+    - ``P …`` (plain P, e.g. ``P 60 min 9h-17h``, ``P TARIFÉ``) → permitted;
+    - anything else (sub-panels, meters, bare schedules…) → other.
+
+    Args:
+        description: Raw ``DESCRIPTION_RPA`` text.
+
+    Returns:
+        The category and whether the sign is reserved (``RÉSERVÉ``).
+    """
+    folded = fold_accents(description).strip()
+    return _KIND_CATEGORY[sign_kind(description)], "RESERVE" in folded.upper()
+
+
+_KIND_CATEGORY = {
+    SignKind.no_parking: SignCategory.prohibited,
+    SignKind.no_stopping: SignCategory.prohibited,
+    SignKind.parking: SignCategory.permitted,
+    SignKind.other: SignCategory.other,
+}
+
+
+def sign_kind(description: str) -> SignKind:
+    """The pictogram a sign shows, from its leading code.
+
+    Args:
+        description: Raw ``DESCRIPTION_RPA`` text.
+
+    Returns:
+        ``no_parking`` (``\\P``), ``no_stopping`` (``\\A``), ``parking`` (plain ``P``)
+        or ``other``.
+    """
+    folded = fold_accents(description).strip()
+    if _NO_PARKING_RE.match(folded):
+        return SignKind.no_parking
+    if _NO_STOPPING_RE.match(folded):
+        return SignKind.no_stopping
+    if _PERMITTED_RE.match(folded):
+        return SignKind.parking
+    return SignKind.other
